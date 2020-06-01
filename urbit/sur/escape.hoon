@@ -23,6 +23,7 @@
       [%ship @p]
       [%sponsor ~]
       [%listen ~]
+      [%clear ~]
   ==
 ::
 +$  escape-view

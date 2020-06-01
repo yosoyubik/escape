@@ -409,6 +409,7 @@
     %ship     (request-ethereum-data `+.act %ship)
     %sponsor  (request-ethereum-data `sponsor %ship)
     %listen   handle-listen
+    %clear    [~ state(events ~)]
     :: %spawns   (handle-spawns-request +.act)
   ==
   ::
@@ -442,41 +443,64 @@
     ==
   --
 ::
+++  update-sponsor-scores
+  |=  events=(list event)
+  ^-  (map @p reputation)
+  =|  updated-sponsors=(map @p reputation)
+  =/  beta  (~(add beta [~ ~]) events)
+  =/  sponsors=(list @p)  ~(val by sponsees)
+  |-  ^-  (map @p reputation)
+  ?~  sponsors  updated-sponsors
+  =/  sponsor=@p  i.sponsors
+  =/  rep=(unit reputation)
+    (~(get by sponsors.state) sponsor)
+  =/  new-score=@rd
+    (score:beta .~0.5 ~ ~ `[%star sponsor])
+  =/  =reputation
+    ?~  rep
+      (~(gas by `reputation`~) [[%escape .~1.0] new-score]~)
+    (~(put by u.rep) [[%escape .~1.0] new-score])
+  %_  $
+    sponsors          t.sponsors
+    updated-sponsors  (~(put by sponsors.state) [sponsor reputation])
+  ==
+::
 ++  update-events
   |=  logs=(list event-log:rpc:ethereum)
   ^-  (quip card _state)
   |^
   =/  [sponsees=(map @p @p) events=(list event)]
     (parse-event-log logs)
-  ~&  [sponsees events]
-  [~ state(sponsees sponsees, events events)]
+  =.  sponsees.state  sponsees
+  =.  events.state  events
+  [~ state(sponsors (update-sponsor-scores events))]
   ::
   ++  parse-event-log
     |=  logs=(list event-log:rpc:ethereum)
     ^-  [(map @p @p) (list event)]
-    =;  parsed=(list (unit [[sponsee=@p sponsor=@p] (list event)]))
-      =|  sponsees=(map @ @)
-      =|  events=(list event)
-      |-
-      ?~  parsed
-        :-  sponsees
-        all:(~(add beta [~ events.state]) events)
-      ?~  i.parsed  $(parsed t.parsed)
-      =+  sponsee=sponsee.-.u.i.parsed
-      =+  sponsor=sponsor.-.u.i.parsed
-      %_  $
-        parsed    t.parsed
-        events    (weld events +.u.i.parsed)
-        sponsees  (~(put by sponsees.state) [sponsee sponsor])
+    =/  parsed=(list (unit [[sponsee=@p sponsor=@p] (list event)]))
+      %+  turn  logs
+      |=  =event-log:rpc:ethereum
+      ^-  (unit [[@p @p] (list event)])
+      =/  =azimuth-event  (parse-azimuth-event event-log)
+      ?~  azimuth-event  ~
+      ?-  -.u.azimuth-event
+        %spawn   `(parse-spawns +.u.azimuth-event)
+        %escape  `(parse-escapes +.u.azimuth-event)
       ==
-    %+  turn  logs
-    |=  =event-log:rpc:ethereum
-    ^-  (unit [[@p @p] (list event)])
-    =/  =azimuth-event  (parse-azimuth-event event-log)
-    ?~  azimuth-event  ~
-    ?-  -.u.azimuth-event
-      %spawn   `(parse-spawns +.u.azimuth-event)
-      %escape  `(parse-escapes +.u.azimuth-event)
+    =|  sponsees=(map @ @)
+    =|  events=(list event)
+    |-
+    ?~  parsed
+      :-  sponsees
+      all:(~(add beta [~ events.state]) events)
+    ?~  i.parsed  $(parsed t.parsed)
+    =+  sponsee=sponsee.-.u.i.parsed
+    =+  sponsor=sponsor.-.u.i.parsed
+    %_  $
+      parsed    t.parsed
+      events    (weld events +.u.i.parsed)
+      sponsees  (~(put by sponsees.state) [sponsee sponsor])
     ==
   ::
   ++  parse-azimuth-event
@@ -502,8 +526,6 @@
   ++  parse-spawns
     |=  [=id:block:able:jael sponsor=@p sponsee=@p]
     ^-  [[@p @p] (list event)]
-    :: =.  new-sponsees  (~(put by new-sponsees) [sponsee sponsor])
-    ~&  sponsoring+[sponsee ~(wyt by sponsees)]
     :-  [sponsee sponsor]
     [id ~ .~1.0 [%escape .~1.0] [%star sponsor]]~
   ::
@@ -511,8 +533,6 @@
     |=  [=id:block:able:jael sponsee=@p sponsor=@p]
     ^-  [[@p @p] (list event)]
     =/  old-sponsor=@p  (~(got by sponsees) sponsee)
-    :: ~&  escape+[sponsee from=old-sponsor to=sponsor]
-    :: =.  new-sponsees  (~(put by new-sponsees) [sponsee sponsor])
     :-  [sponsee sponsor]
     :~  [id ~ .~1.0 [%escape .~1.0] [%star sponsor]]
         [id ~ .~0.0 [%escape .~1.0] [%star old-sponsor]]

@@ -1,5 +1,12 @@
 /-  *beta
+=,  block:able:jael
 |%
++$  azimuth-event
+  %-  unit
+  $%  [%spawn =id star=@p planet=@p]
+      [%escape =id planet=@p star=@p]
+  ==
+::
 +$  reputation  (map dimension score)
 ::
 +$  escape-request
@@ -15,6 +22,7 @@
       [%all ~]
       [%ship @p]
       [%sponsor ~]
+      [%listen ~]
   ==
 ::
 +$  escape-view

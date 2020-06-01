@@ -28,7 +28,7 @@
   ++  date
     |=  =timestamp
     ^+  events
-    (skim events |=(event =(^timestamp timestamp)))
+    (skim events |=(event ?~(^timestamp & =(u.^timestamp timestamp))))
   --
 ::
 ++  score
@@ -59,7 +59,8 @@
   |=  event
   ^-  ?
   ?&  ?~  date  &
-      =(u.date timestamp)
+      ?~  timestamp  &
+      =(u.date u.timestamp)
     ::
       ?~  ^dimension  &
       =(u.^dimension tag.dimension)

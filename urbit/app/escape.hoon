@@ -1,9 +1,10 @@
-::  escape: a reputation score for stars
+::  escape: a reputation score for sponsors
 ::
 ::    data:            scry command:
 ::    ------------    ----------------------------------------------
-::    stars           .^((set @p) %gx /=escape=/stars/noun)
+::    sponsors        .^((set @p) %gx /=escape=/sponsors/noun)
 ::    events          .^((list event) %gx /=escape=/events/noun)
+::    sponsees        .^((set @p) %gx /=escape=/sponsees/noun)
 ::    reputation      .^(reputation %gx /=escape=/reputation/<star>/noun)
 ::
 /-  *escape, *beta, eth-watcher
@@ -15,7 +16,8 @@
     ::
     +$  state-zero
       $:  %0
-          stars=(map @p reputation)
+          sponsors=(map @p reputation)
+          sponsees=(map @p @p)
           events=(list event)
           url=_'http://eth-mainnet.urbit.org:8545'
       ==
@@ -56,28 +58,29 @@
     ++  on-init
       ^-  (quip card _this)
       =+  bowl
-      =/  sponsor=@p  (sein:title our now our)
-      :-  ::[%pass /escape/request %arvo %b %wait (add now.bowl ~h1)]~
-      :_  ~
-      :*  %pass
-          /eth-watcher
-          %agent
-          [our.bowl %eth-watcher]
-          %watch
-          /logs/[dap.bowl]
-      ==
-      %_    this
-          events
-        =<  all
-        %-  ~(add beta [~ ~])
-        :~  [now.bowl .~1.0 [%escape .~1.0] [%star sponsor]]
-            [now.bowl .~1.0 [%escape .~1.0] [%star sponsor]]
-            [now.bowl .~1.0 [%escape .~1.0] [%star sponsor]]
-            [now.bowl .~1.0 [%escape .~1.0] [%star sponsor]]
-            [now.bowl .~0.0 [%escape .~1.0] [%star ~dopzod]]
-            [now.bowl .~0.0 [%escape .~1.0] [%star ~binzod]]
-        ==
-      ==
+      :: =/  sponsor=@p  (sein:title our now our)
+      :: :-  ::[%pass /escape/request %arvo %b %wait (add now.bowl ~h1)]~
+      :: :_  ~
+      :: :*  %pass
+      ::     /eth-watcher
+      ::     %agent
+      ::     [our.bowl %eth-watcher]
+      ::     %watch
+      ::     /logs/[dap.bowl]
+      :: ==
+      [~ this]
+      :: %_    this
+      ::     events
+      ::   =<  all
+      ::   %-  ~(add beta [~ ~])
+      ::   :~  [now.bowl .~1.0 [%escape .~1.0] [%star sponsor]]
+      ::       [now.bowl .~1.0 [%escape .~1.0] [%star sponsor]]
+      ::       [now.bowl .~1.0 [%escape .~1.0] [%star sponsor]]
+      ::       [now.bowl .~1.0 [%escape .~1.0] [%star sponsor]]
+      ::       [now.bowl .~0.0 [%escape .~1.0] [%star ~dopzod]]
+      ::       [now.bowl .~0.0 [%escape .~1.0] [%star ~binzod]]
+      ::   ==
+      :: ==
     ++  on-save
       !>(state)
     ::
@@ -115,7 +118,7 @@
       |^
       ?+  wir  (on-agent:def wir sign)
         [%request *]      (handle-request t.wir sign)
-        ::  [%eth-watcher ~]  (handle-eth-watcher wire sign)
+        [%eth-watcher *]  (handle-eth-watcher t.wir sign)
       ==
       ::
       ++  handle-request
@@ -154,22 +157,21 @@
       ::  to events coming from the blockchain, for our score, all
       ::  related to escapes and spawns.
       ::
-      :: ++  handle-eth-watcher
-      ::   |=  [=wire =sign:agent:gall]
-      ::   ?+    -.sign  (on-agent:def wire sign)
-      ::       %fact
-      ::     =*  path  t.wire
-      ::     ?+    p.cage.sign  (on-agent:def wire sign)
-      ::         %eth-watcher-diff
-      ::       =+  !<(diff=diff:eth-watcher q.cage.sign)
-      ::       =^  cards  state
-      ::         ?+  -.diff  (on-agent:def wire sign)
-      ::           %history  (event-logs-to-udiffs loglist.diff)
-      ::           %log      (event-logs-to-udiffs event-log.diff ~)
-      ::         ==
-      ::       [cards this]
-      ::     ==
-      ::   ==
+      ++  handle-eth-watcher
+        |=  [=wire =sign:agent:gall]
+        ?+    -.sign  (on-agent:def wire sign)
+            %fact
+          ?+    p.cage.sign  (on-agent:def wire sign)
+              %eth-watcher-diff
+            =+  !<(diff=diff:eth-watcher q.cage.sign)
+            =^  cards  state
+              ?+  -.diff  ~|([%eth-watcher-strange-fact p.cage.sign] !!)
+                %history  (update-events loglist.diff)
+                %log      (update-events event-log.diff ~)
+              ==
+            [cards this]
+          ==
+        ==
       --
     ::
     ++  on-arvo
@@ -191,10 +193,13 @@
       ^-  (unit (unit cage))
       ?+    path  (on-peek:def path)
           [%x %reputation @p ~]
-        ``noun+!>((~(got by stars) i.t.t.path))
+        ``noun+!>((~(got by sponsors) i.t.t.path))
       ::
-          [%x %stars ~]
-        ``noun+!>(~(key by stars))
+          [%x %sponsors ~]
+        ``noun+!>(~(key by sponsors))
+      ::
+          [%x %sponsees ~]
+        ``noun+!>(~(key by sponsees))
       ::
           [%x %events ~]
         ``noun+!>(events)
@@ -315,22 +320,28 @@
   ++  all
     |=  ans=(list [id=@t res=@t])
     ^-  (quip card _state)
-    =/  data=(list [sponsored=@ud spawned=@ud sponsor=@p is-live=?])
+    =/  data=(list [sponsored=@rd spawned=@rd sponsor=@p is-live=?])
       |-
       ?~  ans  ~
       ?>  ?=([^ ^ ^] ans)
-      =/  sponsored=@ud
+      =/  sponsored=@rd
+        %-  sun:rd
         (decode-results:abi:ethereum res.i.ans [%uint]~)
-      =/  spawned=@ud
+      =/  spawned=@rd
+        %-  sun:rd
         (decode-results:abi:ethereum res.i.t.ans [%uint]~)
       =/  is-live=?
         (decode-results:abi:ethereum res.i.t.t.ans [%bool]~)
-      =+  ^-  [tape @t sponsor=@p]
+      =+  ^-  [tape @t star=@p]
       (rash id.i.ans ;~(plug (star aln) hep ;~(pfix sig fed:ag)))
-      :: (~(put by stars) [star  ])
-      :: (expected-value:beta success total prior)
+      :: =/  =score
+      ::   (expected-value:beta success total prior)
+      :: (~(put by sponsors) [star  ])
+      :: ?:  (lte spawned sponsored)
+      :: (add sponsored (sub spawned sponsored))
+      ::
       :_  $(ans t.t.t.ans)
-      [sponsored spawned sponsor is-live]
+      [sponsored spawned star is-live]
     ~&  data
     [~ state]
   ::
@@ -356,12 +367,12 @@
   ::   =/  score-marzod=@rd  (score:beta .~0.5 ~ ~ `[%star ~marzod])
   ::   =/  score-binzod=@rd  (score:beta .~0.5 ~ ~ `[%star ~binzod])
   ::
-  ::   (~(put by stars) ^sponsor)
+  ::   (~(put by sponsors) ^sponsor)
   ::   =/  =reputation
   ::     [~(get by *reputation) []~]
   ::   :-  ~
   ::   %_  state
-  ::     stars  (~(put by stars) [^sponsor ])
+  ::     sponsors  (~(put by sponsors) [^sponsor ])
   ::   ==
   :: ::
   :: ++  escapes
@@ -372,7 +383,7 @@
   ::   ~&  escapes
   ::   [~ state]
   ::   :: =/  =reputation
-  ::   ::   (~(got by stars) (sein:title our.bowl now our.bowl))
+  ::   ::   (~(got by sponsors) (sein:title our.bowl now our.bowl))
   ::   :: =.  reputation
   ::   ::   (~(put reputation) [dimension.reputation new-score])
   ::
@@ -397,6 +408,7 @@
     %all      (request-ethereum-data ~ %all)
     %ship     (request-ethereum-data `+.act %ship)
     %sponsor  (request-ethereum-data `sponsor %ship)
+    %listen   handle-listen
     :: %spawns   (handle-spawns-request +.act)
   ==
   ::
@@ -406,53 +418,104 @@
       !>
       :+  %watch  /[dap.bowl]
       ^-  config:eth-watcher
-      :*  url  |  ~m5  ~m30
+      :*  url  |  ~s10  ~m2
           launch:contracts:azimuth
           ~[azimuth:contracts:azimuth]
         ::
-        :_  [(gulf 256 (sub 260 1)) ~]
+        :_  [(gulf 0 (sub 1 1)) ~]
         =>  azimuth-events:azimuth
-        ~[escape-requested escape-canceled]
+        ~[spawned escape-accepted]
       ==
     :_  state
     [%pass /init %agent [our.bowl %eth-watcher] %poke %eth-watcher-poke args]~
+  ::
+  ++  handle-listen
+    ^-  (quip card _state)
+    :_  state
+    :_  ~
+    :*  %pass
+        /eth-watcher
+        %agent
+        [our.bowl %eth-watcher]
+        %watch
+        /logs/[dap.bowl]
+    ==
   --
-  :: ++  handle-all
-  ::   ^-  (quip card state)
-
-  ::
-  :: ++  handle-ship-request
-  ::  |=  ship=@p
-  ::  ^-  (quip card state)
-  ::  (request-ethereum-data ship %ship)
-  ::
-  :: ++  handle-spawns-request
-  ::   |=  ship=@p
-  ::   (request-ethereum-spawns `ship)
-  :: --
 ::
-++  event-logs-to-udiffs
-  |=  event-logs=(list =event-log:rpc:ethereum)
+++  update-events
+  |=  logs=(list event-log:rpc:ethereum)
   ^-  (quip card _state)
-  =,  able:jael
-  =/  =udiffs:point
-    %+  murn  event-logs
+  |^
+  =/  [sponsees=(map @p @p) events=(list event)]
+    (parse-event-log logs)
+  ~&  [sponsees events]
+  [~ state(sponsees sponsees, events events)]
+  ::
+  ++  parse-event-log
+    |=  logs=(list event-log:rpc:ethereum)
+    ^-  [(map @p @p) (list event)]
+    =;  parsed=(list (unit [[sponsee=@p sponsor=@p] (list event)]))
+      =|  sponsees=(map @ @)
+      =|  events=(list event)
+      |-
+      ?~  parsed
+        :-  sponsees
+        all:(~(add beta [~ events.state]) events)
+      ?~  i.parsed  $(parsed t.parsed)
+      =+  sponsee=sponsee.-.u.i.parsed
+      =+  sponsor=sponsor.-.u.i.parsed
+      %_  $
+        parsed    t.parsed
+        events    (weld events +.u.i.parsed)
+        sponsees  (~(put by sponsees.state) [sponsee sponsor])
+      ==
+    %+  turn  logs
     |=  =event-log:rpc:ethereum
-    ^-  (unit [=ship =udiff:point])
+    ^-  (unit [[@p @p] (list event)])
+    =/  =azimuth-event  (parse-azimuth-event event-log)
+    ?~  azimuth-event  ~
+    ?-  -.u.azimuth-event
+      %spawn   `(parse-spawns +.u.azimuth-event)
+      %escape  `(parse-escapes +.u.azimuth-event)
+    ==
+  ::
+  ++  parse-azimuth-event
+    |=  =event-log:rpc:ethereum
+    ^-  azimuth-event
     ?~  mined.event-log
       ~
     ?:  removed.u.mined.event-log
       ~&  [%removed-log event-log]
       ~
-    =/  =id:block  [block-hash block-number]:u.mined.event-log
+    =/  =id:block:able:jael  [block-hash block-number]:u.mined.event-log
     =,  azimuth-events:azimuth
     =,  abi:ethereum
-    ?:  =(escape-requested i.topics.event-log)
-      =/  [who=@ wer=@]
+    ?:  =(spawned i.topics.event-log)
+      =/  [star=@ planet=@]
         (decode-topics t.topics.event-log ~[%uint %uint])
-      `[who id %spon `wer]
-    ~&  [%bad-topic event-log]
-    ~
-  ~&  udiffs
-  [~ state]
+      `[%spawn id star planet]
+    ?.  =(escape-accepted i.topics.event-log)  ~
+    =/  [planet=@ star=@]
+      (decode-topics t.topics.event-log ~[%uint %uint])
+    `[%escape id planet star]
+  ::
+  ++  parse-spawns
+    |=  [=id:block:able:jael sponsor=@p sponsee=@p]
+    ^-  [[@p @p] (list event)]
+    :: =.  new-sponsees  (~(put by new-sponsees) [sponsee sponsor])
+    ~&  sponsoring+[sponsee ~(wyt by sponsees)]
+    :-  [sponsee sponsor]
+    [id ~ .~1.0 [%escape .~1.0] [%star sponsor]]~
+  ::
+  ++  parse-escapes
+    |=  [=id:block:able:jael sponsee=@p sponsor=@p]
+    ^-  [[@p @p] (list event)]
+    =/  old-sponsor=@p  (~(got by sponsees) sponsee)
+    :: ~&  escape+[sponsee from=old-sponsor to=sponsor]
+    :: =.  new-sponsees  (~(put by new-sponsees) [sponsee sponsor])
+    :-  [sponsee sponsor]
+    :~  [id ~ .~1.0 [%escape .~1.0] [%star sponsor]]
+        [id ~ .~0.0 [%escape .~1.0] [%star old-sponsor]]
+    ==
+  --
 --

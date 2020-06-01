@@ -1,7 +1,8 @@
 |%
 +$  entity     noun
 +$  score      @rd
-+$  timestamp  @da
++$  id         *
++$  timestamp  (unit @da)
 +$  dimension  [tag=term weight=@rd]
-+$  event      [=timestamp =score =dimension =entity]
++$  event      [=id =timestamp =score =dimension =entity]
 --

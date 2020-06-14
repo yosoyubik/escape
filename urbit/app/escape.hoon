@@ -1,25 +1,36 @@
-::  escape: a reputation score for sponsors
+::  escape: a reputation score for urbit sponsors
 ::
 ::    data:            scry command:
 ::    ------------    ----------------------------------------------
-::    sponsors        .^((set @p) %gx /=escape=/sponsors/noun)
-::    events          .^((list event) %gx /=escape=/events/noun)
-::    sponsees        .^((set @p) %gx /=escape=/sponsees/noun)
-::    reputation      .^(reputation %gx /=escape=/reputation/<star>/noun)
+::    sponsors       .^((set @p) %gx /=escape=/sponsors/noun)
+::    n-sponsors     ~(wyt in .^((set @p) %gx /=escape=/sponsors/noun))
+::    events         .^((list event) %gx /=escape=/events/noun)
+::    sponsees       .^((set @p) %gx /=escape=/sponsees/noun)
+::    reputation     .^(reputation %gx /=escape=/reputation/<@p>/noun)
+::    sort-sponsors  .^((list [@p reputation]) %gx /=escape=/sponsors/sort/noun)
 ::
 /-  *escape, *beta, eth-watcher
 /+  beta, default-agent, escape, verb, dbug
 ::  State
 ::
 =>  |%
-    +$  card  card:agent:gall
+    +$  card       card:agent:gall
+    +$  loglist    loglist:eth-watcher
+    +$  event-log  event-log:rpc:ethereum
     ::
     +$  state-zero
       $:  %0
           sponsors=(map @p reputation)
-          sponsees=(map @p @p)
+          sponsees=(map @p [=ship active=?])
           events=(list event)
-          url=_'http://eth-mainnet.urbit.org:8545'
+          weights=(map term weight)
+          prior=@rd
+          url=@t
+          ::  From: /app/gaze.hoon
+          ::
+          running=(unit @ta)
+          qued=loglist
+          time=(map @ud @da)
       ==
     --
 ::
@@ -29,17 +40,52 @@
     ++  poke-spider
       |=  [=ship =path =cage]
       ^-  card
-      [%pass [%request path] %agent [ship %spider] %poke cage]
+      [%pass path %agent [ship %spider] %poke cage]
     ::
     ++  watch-spider
       |=  [=ship =path =sub=path]
       ^-  card
-      [%pass [%request path] %agent [ship %spider] %watch sub-path]
+      [%pass path %agent [ship %spider] %watch sub-path]
     ::
     ++  leave-spider
       |=  [=ship =path]
       ^-  card
       [%pass [%escape path] %agent [ship %spider] %leave ~]
+    ::
+    ++  poke-watcher
+      |=  [req=escape-request =ship args=vase]
+      ^-  card
+      :*  %pass
+          /init/[req]
+          %agent
+          [ship %eth-watcher]
+          %poke
+          %eth-watcher-poke
+          args
+      ==
+    ::
+    ++  watch-watcher
+      |=  [req=escape-request =ship]
+      ^-  card
+      :*  %pass
+          /eth-watcher/[req]
+          %agent
+          [ship %eth-watcher]
+          %watch
+          /logs/escape/[req]
+      ==
+    ::
+    ++  leave-watcher
+      |=  [req=escape-request =ship args=vase]
+      ^-  card
+      :*  %pass
+          /leave/[req]
+          %agent
+          [ship %eth-watcher]
+          %poke
+          %eth-watcher-poke
+          args
+      ==
     --
 ::
 =|  state-zero
@@ -55,32 +101,7 @@
         ec           ~(. escape-core bowl)
         def          ~(. (default-agent this %|) bowl)
     ::
-    ++  on-init
-      ^-  (quip card _this)
-      =+  bowl
-      :: =/  sponsor=@p  (sein:title our now our)
-      :: :-  ::[%pass /escape/request %arvo %b %wait (add now.bowl ~h1)]~
-      :: :_  ~
-      :: :*  %pass
-      ::     /eth-watcher
-      ::     %agent
-      ::     [our.bowl %eth-watcher]
-      ::     %watch
-      ::     /logs/[dap.bowl]
-      :: ==
-      [~ this]
-      :: %_    this
-      ::     events
-      ::   =<  all
-      ::   %-  ~(add beta [~ ~])
-      ::   :~  [now.bowl .~1.0 [%escape .~1.0] [%star sponsor]]
-      ::       [now.bowl .~1.0 [%escape .~1.0] [%star sponsor]]
-      ::       [now.bowl .~1.0 [%escape .~1.0] [%star sponsor]]
-      ::       [now.bowl .~1.0 [%escape .~1.0] [%star sponsor]]
-      ::       [now.bowl .~0.0 [%escape .~1.0] [%star ~dopzod]]
-      ::       [now.bowl .~0.0 [%escape .~1.0] [%star ~binzod]]
-      ::   ==
-      :: ==
+    ++  on-init  on-init:def
     ++  on-save
       !>(state)
     ::
@@ -92,6 +113,7 @@
     ++  on-poke
       |=  [=mark =vase]
       ^-  (quip card _this)
+      ~&  mark
       ?+    mark  (on-poke:def mark vase)
           %escape-action
         =^  cards  state
@@ -117,8 +139,9 @@
       ^-  (quip card _this)
       |^
       ?+  wir  (on-agent:def wir sign)
-        [%request *]      (handle-request t.wir sign)
+        [%req *]          (handle-request t.wir sign)
         [%eth-watcher *]  (handle-eth-watcher t.wir sign)
+        [%timestamps *]   (handle-timestamps t.wir sign)
       ==
       ::
       ++  handle-request
@@ -153,22 +176,68 @@
           ==
         ==
       ::
-      ::  TODO: For more granularity, the eth-watcher will listen
-      ::  to events coming from the blockchain, for our score, all
-      ::  related to escapes and spawns.
-      ::
       ++  handle-eth-watcher
         |=  [=wire =sign:agent:gall]
+        ^-  (quip card _this)
+        ?+    wire  (on-agent:def wir sign)
+            [%all *]
+          ?+    -.sign  (on-agent:def wire sign)
+              %fact
+            ?+    p.cage.sign  (on-agent:def wire sign)
+                %eth-watcher-diff
+              =+  !<(diff=diff:eth-watcher q.cage.sign)
+              =^  cards  state
+                ?+    -.diff  ~|([%eth-watcher-strange-fact p.cage.sign] !!)
+                    %history
+                  =.  qued  ~
+                  (update-events:ec loglist.diff)
+                ::
+                    %log
+                  (update-events:ec event-log.diff ~)
+                ==
+              [cards this]
+            ==
+          ==
+        ::
+            [%are-live *]
+          ?+    -.sign  (on-agent:def wire sign)
+              %fact
+            ?+    p.cage.sign  (on-agent:def wire sign)
+                %eth-watcher-diff
+              =+  !<(diff=diff:eth-watcher q.cage.sign)
+              =^  cards  state
+                ?+  -.diff  ~|([%eth-watcher-strange-fact p.cage.sign] !!)
+                    %history
+                  =.  qued  ~
+                  (check-sponsor-live:ec loglist.diff)
+                ::
+                    %log
+                  (check-sponsor-live:ec ~[event-log.diff])
+                ==
+              [cards this]
+            ==
+          ==
+        ==
+      ::
+      ++  handle-timestamps
+        |=  [=wire =sign:agent:gall]
+        ^-  (quip card _this)
+        :: ~&  ["handle-timestamps" wire]
         ?+    -.sign  (on-agent:def wire sign)
             %fact
-          ?+    p.cage.sign  (on-agent:def wire sign)
-              %eth-watcher-diff
-            =+  !<(diff=diff:eth-watcher q.cage.sign)
+          ?+  p.cage.sign  (on-agent:def wire sign)
+              %thread-fail
+            =+  !<([=term =tang] q.cage.sign)
+            =/  =tank  leaf+"{(trip dap.bowl)} thread failed; will retry"
+            %-  (slog tank leaf+<term> tang)
             =^  cards  state
-              ?+  -.diff  ~|([%eth-watcher-strange-fact p.cage.sign] !!)
-                %history  (update-events loglist.diff)
-                %log      (update-events event-log.diff ~)
-              ==
+              (request-ethereum-data:ec ~ %timestamps)
+            [cards this]
+          ::
+              %thread-done
+            =^  cards  state
+              %-  save-timestamps:ec
+              !<((list [@ud @da]) q.cage.sign)
             [cards this]
           ==
         ==
@@ -177,11 +246,17 @@
     ++  on-arvo
       |=  [=wire =sign-arvo]
       ^-  (quip card _this)
+      ~&  [wire sign-arvo]
       =^  cards  state
         ?+    wire  (on-arvo:def wire sign-arvo)
             [%escape %request ~]
           ?+  +<.sign-arvo  (on-arvo:def wire sign-arvo)
-            %wake           (wake:ec wire +>.sign-arvo)
+            %wake  (wake:ec wire +>.sign-arvo)
+          ==
+        ::
+            [%watch ~]
+          ?+  +<.sign-arvo  (on-arvo:def wire sign-arvo)
+            %wake  (wake:ec wire +>.sign-arvo)
           ==
         ==
       [cards this]
@@ -192,11 +267,16 @@
       |=  =path
       ^-  (unit (unit cage))
       ?+    path  (on-peek:def path)
-          [%x %reputation @p ~]
-        ``noun+!>((~(got by sponsors) i.t.t.path))
+          [%x %reputation @t ~]
+        =/  sponsor=@p
+          (rash i.t.t.path ;~(pfix sig fed:ag))
+        ``noun+!>((~(got by sponsors) sponsor))
       ::
           [%x %sponsors ~]
         ``noun+!>(~(key by sponsors))
+      ::
+          [%x %sponsors %sort ~]
+        ``noun+!>((sort-sponsors %escape))
       ::
           [%x %sponsees ~]
         ``noun+!>(~(key by sponsees))
@@ -217,12 +297,18 @@
 ++  wake
   |=  [wir=wire error=(unit tang)]
   ^-  (quip card _state)
-  ~&  [wir error]
-  :: ?^  error
-  ::   ~&  error+u.error
-    [~ state]
-  :: ?>  ?=([%escape %request ~] wir)
-  :: (request-ethereum-data ~ %sponsor)
+  :_  state
+  [(watch-watcher %all our.bowl)]~
+::
+++  request-block-times
+  ^-  (quip card _state)
+  =/  tid=@ta  (cat 3 'request--' (scot %uv eny.bowl))
+  =/  file=@t  %eth-get-timestamps
+  =/  args     [~ `tid file !>(timestamps:request)]
+  :_  state
+  :~  (poke-spider our.bowl /timestamps/[file] %spider-start !>(args))
+      (watch-spider our.bowl /timestamps/[file]/[tid] /thread-result/[tid])
+  ==
 ::
 ++  request-ethereum-data
   |=  [ship=(unit @p) req=escape-request]
@@ -233,18 +319,15 @@
   =/  args
     :^   ~  `new-tid  filename
     ?+  req  !!
-      %all   !>(all:request)
-      %ship  !>((ship:request (need ship)))
+      %all         !>(all:request)
+      %ship        !>((ship:request (need ship)))
       :: %escapes  [%escape-request !>((escapes:request ship))]
       :: %spawns   [%escape-request !>((spawns:request ship))]
-      :: %is-live  [%escape-request !>((is-live:request ship))]
+      :: %are-live  !>((are-live:request ship))
     ==
   :_  state
-  :~  (poke-spider our.bowl /[filename] %spider-start !>(args))
-      (watch-spider our.bowl /[filename]/[new-tid] /thread-result/[new-tid])
-      ::  resets the timer
-      ::
-      :: [%pass /escape/request %arvo %b %wait (add now.bowl ~h1)]
+  :~  (poke-spider our.bowl /req/[filename] %spider-start !>(args))
+      (watch-spider our.bowl /req/[filename]/[new-tid] /thread-result/[new-tid])
   ==
 ::
 ++  request
@@ -257,7 +340,7 @@
     ::  identified later by the id of the proto request
     ::
     %+  turn
-      (gulf 256 (sub 260 1))
+      (gulf 256 (sub 513 1))
     |=(ship=@ ~[(sponsored ship) (spawned ship) (is-live ship)])
   ::
   ++  ship
@@ -286,12 +369,27 @@
       azimuth:contracts:azimuth
     ['getSponsoringCount(uint32)' [%uint `@`ship]~]
   ::
+  ++  are-live
+    ^-  [@t (list proto-read-request:rpc:ethereum)]
+    :-  url
+    (turn (gulf 256 (sub 260 1)) |=(ship=@ (is-live ship)))
+  ::
   ++  is-live
     |=  ship=@p
     ^-  proto-read-request:rpc:ethereum
     :+  (id 'isLive' ship)
        azimuth:contracts:azimuth
     ['isLive(uint32)' [%uint `@`ship]~]
+  ::
+  ++  timestamps
+    ^-  [url=@t blocks=(list @ud)]
+    :-  url.state
+    =-  ~(tap in -)
+    %-  ~(gas in *(set @ud))
+    ^-  (list @ud)
+    %+  turn  qued
+    |=  log=event-log:rpc:ethereum
+    block-number:(need mined.log)
   ::
   ++  id
     |=  [attr=@t ship=@p]
@@ -310,7 +408,7 @@
   ^-  (quip card _state)
   |^
   ?+  wire  ~|([dap.bowl %unexpected-thread-done wire] !!)
-    [%escape-all @t ~]      (all !<((list [@t @t]) q.cage))
+    [%escape-all @t ~]   (all !<((list [@t @t]) q.cage))
     [%escape-ship @t ~]  (ship !<([@t @t] q.cage))
     :: [%sponsor @t]  (sponsor !<([@t @t] q.cage))
     :: [%escapes ~]   (escapes !<(@t q.cage))
@@ -320,6 +418,7 @@
   ++  all
     |=  ans=(list [id=@t res=@t])
     ^-  (quip card _state)
+    ~&  "all"
     =/  data=(list [sponsored=@rd spawned=@rd sponsor=@p is-live=?])
       |-
       ?~  ans  ~
@@ -342,7 +441,8 @@
       ::
       :_  $(ans t.t.t.ans)
       [sponsored spawned star is-live]
-    ~&  data
+    ~&  all+(lent data)
+    ~&  active+(lent (skim data |=([@rd @rd @p is-live=?] is-live)))
     [~ state]
   ::
   ++  ship
@@ -403,109 +503,330 @@
   |=  act=escape-action
   ^-  (quip card _state)
   |^
-  ?-  -.act
-    %init     handle-init
-    %all      (request-ethereum-data ~ %all)
-    %ship     (request-ethereum-data `+.act %ship)
-    %sponsor  (request-ethereum-data `sponsor %ship)
-    %listen   handle-listen
-    %clear    [~ state(events ~)]
-    :: %spawns   (handle-spawns-request +.act)
+  ?+  -.act  !!
+    %init      (handle-init +.act)
+    %all       (request-ethereum-data ~ %all)
+    %ship      (request-ethereum-data `+.act %ship)
+    %sponsor   (request-ethereum-data `sponsor %ship)
+    %clear     [~ state(events ~, sponsors ~, sponsees ~, running ~, qued ~, time ~)]
+    %leave     (handle-leave +.act)
+    %are-live  handle-are-live
   ==
   ::
   ++  handle-init
+    ::  TODO: add option to choose type of sponsor (star, galaxy)
+    ::
+    |=  [url=@t prior=@rd dimensions=(list [term weight])]
     ^-  (quip card _state)
-    =/  args=vase
-      !>
-      :+  %watch  /[dap.bowl]
-      ^-  config:eth-watcher
-      :*  url  |  ~s10  ~m2
-          launch:contracts:azimuth
-          ~[azimuth:contracts:azimuth]
+    ~&  "poking eth-watcher..."
+    :_  %_  state
+          url      url
+          prior    prior
+          weights  (~(gas by weights) dimensions)
+        ==
+    :~  (poke-watcher %all our.bowl (ethereum-config %all url))
+        ::  From: /app/gaze.hoon
+        ::  we punt on subscribing to the eth-watcher for a little while.
+        ::  this way we get a %history diff containing all past events,
+        ::  instead of so many individual %log diffs that we bail meme.
+        ::  (to repro, replace this with:
+        ::    (watch-watcher %all our.bowl)
+        ::  )
         ::
-        :_  [(gulf 0 (sub 1 1)) ~]
-        =>  azimuth-events:azimuth
-        ~[spawned escape-accepted]
-      ==
-    :_  state
-    [%pass /init %agent [our.bowl %eth-watcher] %poke %eth-watcher-poke args]~
+        :: [%pass /watch %arvo %b %wait (add now.bowl ~m35)]
+        [%pass /watch %arvo %b %wait (add now.bowl ~m4)]
+    ==
+
   ::
-  ++  handle-listen
+  ++  handle-leave
+    |=  req=escape-request
     ^-  (quip card _state)
     :_  state
-    :_  ~
-    :*  %pass
-        /eth-watcher
-        %agent
-        [our.bowl %eth-watcher]
-        %watch
-        /logs/[dap.bowl]
+    :~  %:  leave-watcher
+            %all
+            our.bowl
+            !>([%clear /escape/[req]])
+        ==
+      ::
+        :*  %pass
+            /eth-watcher/[req]
+            %agent
+            [our.bowl %eth-watcher]
+            %leave
+            ~
+    ==  ==
+   ::
+  ::
+  ++  handle-are-live
+    ^-  (quip card _state)
+    ~&  "poking eth-watcher..."
+    =/  args=vase  (ethereum-config %are-live url.state)
+    :_  state
+    :~  (watch-watcher %are-live our.bowl)
+        (poke-watcher %are-live our.bowl args)
     ==
   --
 ::
-++  update-sponsor-scores
-  |=  events=(list event)
-  ^-  (map @p reputation)
-  =|  updated-sponsors=(map @p reputation)
-  =/  beta  (~(add beta [~ ~]) events)
-  =/  sponsors=(list @p)  ~(val by sponsees)
-  |-  ^-  (map @p reputation)
-  ?~  sponsors  updated-sponsors
-  =/  sponsor=@p  i.sponsors
-  =/  rep=(unit reputation)
-    (~(get by sponsors.state) sponsor)
-  =/  new-score=@rd
-    (score:beta .~0.5 ~ ~ `[%star sponsor])
-  =/  =reputation
-    ?~  rep
-      (~(gas by `reputation`~) [[%escape .~1.0] new-score]~)
-    (~(put by u.rep) [[%escape .~1.0] new-score])
-  %_  $
-    sponsors          t.sponsors
-    updated-sponsors  (~(put by sponsors.state) [sponsor reputation])
-  ==
+++  ethereum-config
+  |=  [req=escape-request url=@t]
+  ^-  vase
+  !>
+  :+  %watch  /escape/[req]
+  ^-  config:eth-watcher
+  ::  TODO: Try with:
+  ::  :*  state.url  %.n  ~h4  ~h2
+  ::
+  :*  url  %.n  ~m5  ~h2
+      :: launch:contracts:azimuth
+      public:mainnet-contracts:azimuth
+      ~[azimuth:contracts:azimuth]
+    ::
+      :_  ~
+      :: :_  [^-((list @) [2.824.325.100 `@`~wicdev-wisryt `@`~migfed (gulf 256 256)]) ~]
+      =>  [azimuth-events:azimuth .]
+      ?+  req  !!
+        %all       ~[spawned escape-accepted activated]
+        %are-live  ~[activated]
+  ==  ==
 ::
 ++  update-events
+  |=  logs=(list event-log)
+  ^-  (quip card _state)
+  :: ~&  (lent logs)
+  |^
+  :: =.  qued  (weld qued logs)
+  :: :: ~&  (lent qued)
+  ?~  logs  ~&  "no logs"  [~ state]
+  ~&  logs+(lent logs)
+  =/  [events=_events sponsees=_sponsees]
+    :: (process-event-log qued)
+    (roll `loglist`logs reduce-event-log)
+  :: ?~  events
+  ::   [~ state(sponsees (~(uni by sponsees.state) sponsees))]
+  ~&  :*  sponsors=~(wyt by sponsors.state)
+          old-sponsees=~(wyt by sponsees.state)
+          new-sponsees=~(wyt by sponsees)
+          old-events=(lent events.state)
+          new-events=(lent events)
+      ==
+  :: =/  tid=@ta  (cat 3 'request--' (scot %uv eny.bowl))
+  :: =?  qued
+  ::   ?=(^ rest)  (flop rest)
+  :: =.  qued.state  (flop rest)
+  :: ~&  running+running
+  :: :-  ?:  |(?=(^ running) =((lent rest) 0))
+  ::       ~&  "no timestamping"
+  ::       ~
+  ::     ~&  "timestamping"
+  ::     =/  file=@t  %eth-get-timestamps
+  ::     =/  args     [~ `tid file !>(timestamps:request)]
+  ::     :~  (poke-spider our.bowl /timestamps/[file] %spider-start !>(args))
+  ::         (watch-spider our.bowl /timestamps/[file]/[tid] /thread-result/[tid])
+  ::     ==
+  :-  ~
+  %=    state
+      :: qued    (flop rest)  ::  oldest first
+    ::  FIXME: bail: foul bailing out
+    ::
+    :: :-  i.events
+    :: ?.  ?=(^ t.events)  events
+    :: [i.t.events events]
+    :: FIXME: bails meme
+    ::
+  ::
+      events
+    (weld events.state events)
+  ::
+      sponsees
+    (~(uni by sponsees.state) sponsees)
+  ::
+      sponsors
+    (~(uni by sponsors.state) (update-sponsor-scores events sponsees))
+      :: running   ?^(running running.state `tid)
+  ==
+  ::
+  :: ++  process-event-log
+  ::   |=  logs=(list event-log:rpc:ethereum)
+  ::   =|  sponsees=(map @p [@p ?])
+  ::   =|  events=(list event)
+  ::   |-  ^-  [_sponsees _events]
+  ::   ?~  logs
+  ::     [sponsees events]
+  ::   =/  =azimuth-event  (process-azimuth-event i.logs)
+  ::   ?~  azimuth-event
+  ::     $(logs t.logs)
+  ::   =/  [[sponsee=@p sponsor=@p active=?] new-events=(list event)]
+  ::     ?-  -.u.azimuth-event
+  ::       %spawn   (process-spawn +.u.azimuth-event)
+  ::       %escape  (process-escape +.u.azimuth-event)
+  ::       %active  (process-active +.u.azimuth-event)
+  ::     ==
+  ::   %_  $
+  ::     logs      t.logs
+  ::     events    (weld events new-events)
+  ::     sponsees  (~(put by sponsees) [sponsee [sponsor active]])
+  ::   ==
+  ::
+  ++  reduce-event-log
+    ::  sponsees is innitialized with the current 'global' value
+    ::
+    |=  [log=event-log [events=(list event) sponsees=_sponsees.state]]
+    ^+  [events sponsees]
+    |^
+    :: =?  sponsees  =(~ sponsees)
+    ::   ~&  ['init sponsees with:' ~(wyt by sponsees.state)]
+    ::   (~(uni by sponsees) sponsees.state)
+    :: ~&  [old-events=(lent events.state) new-events=(lent events)]
+    ::  to ensure logs are processed in sane order,
+    ::  stop processing as soon as we skipped one
+    ::
+    :: ?^  rest  [[log rest] events sponsees]
+    :: =/  timestamp=(unit @da)
+    ::   %-  ~(get by time)
+    ::   block-number:(need mined.log)
+    :: ?~  timestamp
+    ::   :: ~&  ["rolling" rest=(lent rest) events=(lent events)]
+    ::   [[log rest] events sponsees]
+    :: :-  rest
+    =/  =azimuth-event
+      (process-azimuth-event log)
+    ?~  azimuth-event
+      [events sponsees]
+    =/  [[sponsee=@p sponsor=@p active=?] new-events=(list event)]
+      ?-  -.u.azimuth-event
+        %spawn   (process-spawn +.u.azimuth-event)
+        %escape  (process-escape +.u.azimuth-event)
+        %active  (process-active +.u.azimuth-event)
+      ==
+    :: ~&  ["process" sponsees=~(wyt by sponsees) new-incoming-events=(lent new-events)]
+    :-  (weld events new-events)
+    (~(put by sponsees) [sponsee [sponsor active]])
+    ::
+    ++  process-azimuth-event
+      |=  =event-log:rpc:ethereum
+      ^-  azimuth-event
+      ?~  mined.event-log
+        ~
+      ?:  removed.u.mined.event-log
+        ~&  [%removed-log event-log]
+        ~
+      :: =/  =id:block:able:jael  [block-hash block-number]:u.mined.event-log
+      =/  id=@t  (scot %uv eny.bowl)
+      =,  azimuth-events:azimuth
+      =,  abi:ethereum
+      ?:  =(spawned i.topics.event-log)
+        =/  [sponsor=@ sponsee=@]
+          (decode-topics t.topics.event-log ~[%uint %uint])
+        ?.  =(%duke (clan:title sponsee))
+          ~
+        :: ~&  `[%spawn id sponsor sponsee]
+        `[%spawn id sponsor sponsee]
+      ?:  =(activated i.topics.event-log)
+        =/  ship=@
+          (decode-topics t.topics.event-log ~[%uint])
+        ?.  =(%duke (clan:title ship))
+          ~
+        :: ~&  `[%active id `@p`ship]
+        `[%active id ship]
+      ?.  =(escape-accepted i.topics.event-log)  ~
+      =/  [sponsee=@ sponsor=@]
+        (decode-topics t.topics.event-log ~[%uint %uint])
+      ?.  =(%duke (clan:title sponsee))
+        ~
+      :: ~&  `[%escape id sponsee sponsor]
+      `[%escape id sponsee sponsor]
+    ::
+    ++  process-spawn
+      |=  [id=@t sponsor=@p sponsee=@p]
+      ^-  [[@p @p ?] (list event)]
+      :: ~&  spawn+[local-sponsees=~(wyt by sponsees) total-sponsees=~(wyt by sponsees.state)]
+      :: ~&  [%spawn [sponsee sponsor %.n]]
+      [[sponsee sponsor %.n] ~]
+      :: :-  [sponsee sponsor %.n]
+      :: [id ~ .~1.0 [%escape eth-spawn-weight] [%star sponsor]]~
+    ::
+    ++  process-active
+      |=  [id=@t sponsee=@p]
+      ^-  [[@p @p ?] (list event)]
+      :: ~&  active+[local-sponsees=~(wyt by sponsees) total-sponsees=~(wyt by sponsees.state)]
+      :: ~&  [%active sponsee (~(get by sponsees) sponsee) %.y]
+      =/  test=(unit [sponsor=@p ?])  (~(get by sponsees) sponsee)
+      =-  ?~  test  ~&  who+sponsee  -
+          -
+      :-  [sponsee ?~(test *@p sponsor.u.test) %.y]
+      [id ~ .~1.0 %spawn [%star ?~(test *@p sponsor.u.test)]]~
+    ::
+    ++  process-escape
+      |=  [id=@t sponsee=@p sponsor=@p]
+      ^-  [[@p @p ?] (list event)]
+      :: ~&  escape-1+[planet=sponsee star=sponsor]
+      =/  test=(unit [old-sponsor=@p ?])  (~(get by sponsees) sponsee)
+      ~&  :-  %escape
+          :*  old-sponsor=?~(test *@p old-sponsor.u.test)
+              planet=sponsee
+              star=sponsor
+              events-so-far=(lent events)
+              local-sponsees=~(wyt by sponsees)
+              total-sponsees=~(wyt by sponsees.state)
+          ==
+      :-  [sponsee sponsor %.y]
+      :~  [id ~ .~1.0 %escape [%star sponsor]]
+          [id ~ .~0.0 %escape [%star ?~(test *@p old-sponsor.u.test)]]
+      ==
+    --
+  --
+::
+++  update-sponsor-scores
+  |=  [events=(list event) sponsees=(map @p [=ship active=?])]
+  ^-  (map @p reputation)
+  :: =/  beta  (~(add beta ~) events ^-((map term weight) weights))
+  =/  beta  ~(. beta events weights)
+  :: =|  updated-sponsors=_sponsors.state
+  :: =/  sponsors=(list [=ship active=?])  ~(val by sponsees)
+  ~&  ["updating sponsors" events=(lent events) sponsees=~(wyt by sponsees) sponsors=(lent sponsors)]
+  %+  roll  ~(val by sponsees)
+  |=  [[sponsor=@p active=?] sponsors=_sponsors.state]
+  ^+  sponsors
+  :: |-  ^-  (map @p reputation)
+  :: ?~  sponsors
+  ::   ~&  ["done" ~(wyt by updated-sponsors)]
+  ::   :: sponsors.state
+  ::   updated-sponsors
+  ?.  active  sponsors
+  ::   ::  sponsee is not active
+  ::   ::
+  ::   ~&  ["not active" ship.i.sponsors (~(get by sponsors.state) ship.i.sponsors)]
+    :: $(sponsors t.sponsors)
+  =/  rep=(unit reputation)
+    (~(get by sponsors.state) sponsor)
+  =/  [local-score=@rd local-success=@rd local-total=@rd]
+    (score:beta prior.state ~ ~ `[%star sponsor])
+  =/  =reputation
+    ?~  rep
+      %-  ~(gas by `reputation`~)
+      [%escape [local-score local-success local-total]]~
+    %+  ~(jab by u.rep)
+      %escape
+    |=  [@rd s=@rd t=@rd]
+    =+  success=(add:rd s local-success)
+    =+  total=(add:rd t local-total)
+    :_  [success total]
+    (expected-value:beta [success total prior.state])
+  (~(put by sponsors) [sponsor reputation])
+  :: %_  $
+  ::   sponsors        t.sponsors
+  ::   :: sponsors.state  (~(put by sponsors.state) [ship.i.sponsors reputation])
+  ::   updated-sponsors  (~(put by sponsors.state) [ship.i.sponsors reputation])
+  :: ==
+::
+++  check-sponsor-live
   |=  logs=(list event-log:rpc:ethereum)
   ^-  (quip card _state)
-  |^
-  =/  [sponsees=(map @p @p) events=(list event)]
-    (parse-event-log logs)
-  =.  sponsees.state  sponsees
-  =.  events.state  events
-  [~ state(sponsors (update-sponsor-scores events))]
-  ::
-  ++  parse-event-log
-    |=  logs=(list event-log:rpc:ethereum)
-    ^-  [(map @p @p) (list event)]
-    =/  parsed=(list (unit [[sponsee=@p sponsor=@p] (list event)]))
-      %+  turn  logs
-      |=  =event-log:rpc:ethereum
-      ^-  (unit [[@p @p] (list event)])
-      =/  =azimuth-event  (parse-azimuth-event event-log)
-      ?~  azimuth-event  ~
-      ?-  -.u.azimuth-event
-        %spawn   `(parse-spawns +.u.azimuth-event)
-        %escape  `(parse-escapes +.u.azimuth-event)
-      ==
-    =|  sponsees=(map @ @)
-    =|  events=(list event)
-    |-
-    ?~  parsed
-      :-  sponsees
-      all:(~(add beta [~ events.state]) events)
-    ?~  i.parsed  $(parsed t.parsed)
-    =+  sponsee=sponsee.-.u.i.parsed
-    =+  sponsor=sponsor.-.u.i.parsed
-    %_  $
-      parsed    t.parsed
-      events    (weld events +.u.i.parsed)
-      sponsees  (~(put by sponsees.state) [sponsee sponsor])
-    ==
-  ::
-  ++  parse-azimuth-event
+  ?~  logs  ~&("no events" [~ state])
+  =/  parsed=(list (unit @p))
+    %+  turn  logs
     |=  =event-log:rpc:ethereum
-    ^-  azimuth-event
+    ^-  (unit @p)
     ?~  mined.event-log
       ~
     ?:  removed.u.mined.event-log
@@ -514,28 +835,58 @@
     =/  =id:block:able:jael  [block-hash block-number]:u.mined.event-log
     =,  azimuth-events:azimuth
     =,  abi:ethereum
-    ?:  =(spawned i.topics.event-log)
-      =/  [star=@ planet=@]
-        (decode-topics t.topics.event-log ~[%uint %uint])
-      `[%spawn id star planet]
-    ?.  =(escape-accepted i.topics.event-log)  ~
-    =/  [planet=@ star=@]
-      (decode-topics t.topics.event-log ~[%uint %uint])
-    `[%escape id planet star]
-  ::
-  ++  parse-spawns
-    |=  [=id:block:able:jael sponsor=@p sponsee=@p]
-    ^-  [[@p @p] (list event)]
-    :-  [sponsee sponsor]
-    [id ~ .~1.0 [%escape .~1.0] [%star sponsor]]~
-  ::
-  ++  parse-escapes
-    |=  [=id:block:able:jael sponsee=@p sponsor=@p]
-    ^-  [[@p @p] (list event)]
-    =/  old-sponsor=@p  (~(got by sponsees) sponsee)
-    :-  [sponsee sponsor]
-    :~  [id ~ .~1.0 [%escape .~1.0] [%star sponsor]]
-        [id ~ .~0.0 [%escape .~1.0] [%star old-sponsor]]
-    ==
-  --
+    ?.  =(activated i.topics.event-log)  ~
+    =/  ship=@  (decode-topics t.topics.event-log ~[%uint])
+    ?.  =((clan:title `@p`ship) %king)  ~
+    ~&  `@p`ship
+    `ship
+  [~ state]
+::
+++  sort-sponsors
+  |=  dimension=term
+  ^-  (list [@p reputation])
+  =;  sorted
+    %+  turn  sorted
+    |=  [sponsor=@p b=reputation]
+    ?>  ?=(^ reputation)
+    :-  sponsor
+    %+  ~(jab by b)  %escape
+    |=  [score=@rd s=@rd t=@rd]
+    :_  [s t]
+    %-  sub:rd
+    ?:  (lth score .~1.0)
+      [.~1.0 score]
+    [score .~1.0]
+  %+  sort  ~(tap by sponsors)
+  |=  [[@p a=reputation] [@p b=reputation]]
+  =/  [a=score *]  (~(got by a) dimension)
+  =/  [b=score *]  (~(got by b) dimension)
+  (lth:rd b a)
+::
+::  +save-timestamps: store timestamps into state (from: /app/gaze.hoon)
+::
+++  save-timestamps
+  |=  timestamps=(list [@ud @da])
+  ^-  (quip card _state)
+  ~&  "saving timestamps"
+  =.  time     (~(gas by time) timestamps)
+  =.  running   ~
+  (update-events ~)
+::
+:: ++  time-order-check
+::   ^-  [rest=loglist logs=(list [wen=@da wat=event])]
+::   %+  roll  `loglist`qued
+::   |=  [log=event-log:rpc [rest=loglist logs=(list [wen=@da wat=event])]]
+::   ::  to ensure logs are processed in sane order,
+::   ::  stop processing as soon as we skipped one
+::   ::
+::   ?^  rest  [[log rest] logs]
+::   =/  tim=(unit @da)
+::     %-  ~(get by time)
+::     block-number:(need mined.log)
+::   ?~  tim  [[log rest] logs]
+::   :-  rest
+::   =+  ven=(event-log-to-event log)
+::   ?~  ven  logs
+::   [[u.tim u.ven] logs]
 --

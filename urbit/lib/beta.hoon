@@ -1,13 +1,12 @@
-/-  *beta
-::  Beta Reputation
+::  Beta Reputation library
 ::
-|_  $:  dimensions=(map @tas weight=@rd)
-        events=(list event)
-    ==
+/-  *beta
+::
+|_  [events=(list event) weights=(map term weight)]
 ++  add
   |=  (list event)
   %_  +>
-    events  (weld events +<)
+    events   (weld events +<)
   ==
 ::
 ++  all
@@ -29,18 +28,28 @@
     |=  =timestamp
     ^+  events
     (skim events |=(event ?~(^timestamp & =(u.^timestamp timestamp))))
+  ::
+  ++  success
+    |*  entity=*
+    ^+  events
+    %+  skim  events
+    |=  event
+    ?&  =(^entity entity)
+        =(score .~1.0)
+    ==
   --
 ::
 ++  score
   |=  $:  prior=@rd
-          dimension=(unit term)
+          tag=(unit term)
           date=(unit timestamp)
           entity=(unit entity)
       ==
-  ^-  @rd
-  =/  grouped=(list event)  (map-events dimension date entity)
+  ^-  [score=@rd success=@rd total=@rd]
+  =/  grouped=(list event)  (map-events tag date entity)
   =/  success=@rd  (roll grouped reduce-event)
-  =/  total=@rd  (sun:rd (lent events))
+  =/  total=@rd  (sun:rd (lent grouped))
+  :_  [success total]
   (expected-value success total prior)
 ::
 ++  expected-value
@@ -50,7 +59,7 @@
   (add:rd total .~2)
 ::
 ++  map-events
-  |=  $:  dimension=(unit term)
+  |=  $:  tag=(unit term)
           date=(unit timestamp)
           entity=(unit entity)
       ==
@@ -62,8 +71,8 @@
       ?~  timestamp  &
       =(u.date u.timestamp)
     ::
-      ?~  ^dimension  &
-      =(u.^dimension tag.dimension)
+      ?~  ^tag  &
+      =(u.^tag tag)
     ::
       ?~  ^entity  &
       =(u.^entity entity)
@@ -74,5 +83,9 @@
   ^-  @rd
   %+  add:rd
     acc
-  (mul:rd score.event weight.dimension.event)
+  (mul:rd score.event (~(got by weights) tag.event))
+::
+++  success-score
+  |=  entity=*
+  (roll (success:filter entity) reduce-event)
 --
